@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Absensi Pro Dinas</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <link rel="manifest" href='data:application/manifest+json,{"short_name":"AbsensiPro","name":"Absensi GPS Dinas","start_url":".","display":"standalone","theme_color":"#2563eb","background_color":"#ffffff","icons":[{"src":"https://cdn-icons-png.flaticon.com/512/1865/1865273.png","sizes":"512x512","type":"image/png"}]}'>
+    <meta name="theme-color" content="#2563eb">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/1865/1865273.png">
+
+    <style>
+        #video-container { position: relative; overflow: hidden; border-radius: 1rem; background: #000; }
+        #timer-overlay { 
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 6rem; font-weight: bold; color: white; text-shadow: 0 0 20px rgba(0,0,0,0.8);
+            pointer-events: none;
+        }
+        .hidden { display: none; }
+        .btn-capture { width: 80px; height: 80px; border-radius: 50%; border: 8px solid #fecaca; background: #ef4444; }
+        .btn-capture:disabled { background: #9ca3af; border-color: #d1d5db; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+
+    <div class="max-w-md mx-auto bg-white min-h-screen shadow-lg flex flex-col">
+        <header class="p-6 bg-blue-600 text-white rounded-b-3xl shadow-md">
+            <h1 class="text-2xl font-bold">Absensi Digital</h1>
+            <p class="text-blue-100 text-sm">Pastikan GPS & Kamera aktif</p>
+        </header>
+
+        <main class="p-6 flex-grow">
+            <div id="step-1" class="space-y-4">
+                <div class="bg-blue-50 p-4 rounded-xl border border-blue-100">
+                    <label class="block text-xs font-bold text-blue-600 uppercase mb-1">Nama Pegawai</label>
+                    <input type="text" id="nama" class="w-full bg-transparent border-b-2 border-blue-200 focus:border-blue-500 outline-none py-1 transition" placeholder="Ketik nama lengkap...">
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-gray-50 p-3 rounded-xl">
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Dinas</label>
+                        <select id="dinas" class="w-full bg-transparent outline-none text-sm">
+                            <option>Dinas Kesehatan</option>
+                            <option>Dinas Pendidikan</option>
+                            <option>Dinas Perhubungan</option>
+                        </select>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded-xl">
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Shift</label>
+                        <select id="shift" class="w-full bg-transparent outline-none text-sm">
+                            <option>Pagi (08:00)</option>
+                            <option>Siang (14:00)</option>
+                            <option>Malam (22:00)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="bg-gray-50 p-4 rounded-xl">
+                    <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Divisi / Bagian</label>
+                    <input type="text" id="divisi" class="w-full bg-transparent border-b border-gray-300 focus:border-blue-500 outline-none py-1" placeholder="Contoh: IT / Keuangan">
+                </div>
+
+                <button onclick="startFlow()" class="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 active:scale-95 transition">
+                    Lanjut Ambil Foto
+                </button>
+            </div>
+
+            <div id="step-2" class="hidden space-y-4">
+                <div id="video-container" class="aspect-[3/4] shadow-2xl">
+                    <video id="video" autoplay playsinline class="w-full h-full object-cover transform -scale-x-100"></video>
+                    <div id="timer-overlay"></div>
+                    <canvas id="canvas" class="hidden w-full h-full object-cover"></canvas>
+                </div>
+
+                <div id="gps-status" class="text-center p-3 rounded-lg text-sm bg-gray-100 animate-pulse text-gray-600 italic">
+                    Sedang mengunci lokasi GPS...
+                </div>
+
+                <div id="controls" class="flex justify-around items-center pt-2">
+                    <button onclick="switchCamera()" class="p-4 bg-gray-100 rounded-full text-xl">🔄</button>
+                    <button id="btn-capture" onclick="startTimer()" class="btn-capture shadow-lg active:scale-90 transition" disabled></button>
+                    <button onclick="location.reload()" class="p-4 bg-gray-100 rounded-full text-xl">❌</button>
+                </div>
+
+                <div id="post-capture" class="hidden space-y-3">
+                    <button onclick="uploadData()" id="btn-kirim" class="w-full bg-green-600 text-white py-4 rounded-2xl font-bold text-lg shadow-lg">Kirim Absensi Sekarang</button>
+                    <button onclick="resetCamera()" class="w-full text-gray-400 font-medium text-sm">Ambil Ulang Foto</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // CONFIGURATION
+        const KANTOR_COORDS = { lat: -7.269821737298653, lng: 112.75682485953594 }; // GANTI KOORDINAT ANDA
+        const MAX_RADIUS = 100; // Meter
+        const WEB_APP_URL = "https://script.google.com/home/projects/1vhliRL9zgS_rBmPoBA0Hk51z1dh30uL_YNpZPR4sJIDx2avHzMSSrMJL/"; // GANTI URL GAS ANDA
+
+        let currentFacingMode = 'user';
+        let stream;
+        let userCoords = { lat: 0, lng: 0 };
+
+        // 1. Start Flow
+        function startFlow() {
+            if(!document.getElementById('nama').value) return alert("Isi nama dulu!");
+            document.getElementById('step-1').classList.add('hidden');
+            document.getElementById('step-2').classList.remove('hidden');
+            initCamera();
+            initGPS();
+        }
+
+        // 2. Camera Logic
+        async function initCamera() {
+            if (stream) stream.getTracks().forEach(t => t.stop());
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: currentFacingMode, width: 720 } 
+                });
+                const video = document.getElementById('video');
+                video.srcObject = stream;
+                // Mirror effect for front camera
+                video.style.transform = currentFacingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
+            } catch (err) {
+                alert("Kamera diblokir atau tidak tersedia.");
+            }
+        }
+
+        function switchCamera() {
+            currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+            initCamera();
+        }
+
+        function startTimer() {
+            let count = 3;
+            const overlay = document.getElementById('timer-overlay');
+            const interval = setInterval(() => {
+                overlay.innerText = count;
+                if (count <= 0) {
+                    clearInterval(interval);
+                    overlay.innerText = "";
+                    capture();
+                }
+                count--;
+            }, 1000);
+        }
+
+        function capture() {
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            
+            // Handle mirror flip for save
+            if(currentFacingMode === 'user') {
+                ctx.translate(canvas.width, 0);
+                ctx.scale(-1, 1);
+            }
+            ctx.drawImage(video, 0, 0);
+            
+            video.classList.add('hidden');
+            canvas.classList.remove('hidden');
+            document.getElementById('controls').classList.add('hidden');
+            document.getElementById('post-capture').classList.remove('hidden');
+        }
+
+        function resetCamera() {
+            document.getElementById('video').classList.remove('hidden');
+            document.getElementById('canvas').classList.add('hidden');
+            document.getElementById('controls').classList.remove('hidden');
+            document.getElementById('post-capture').classList.add('hidden');
+        }
+
+        // 3. GPS & Geofencing
+        function getDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3;
+            const dLat = (lat2-lat1) * Math.PI/180;
+            const dLon = (lon2-lon1) * Math.PI/180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        function initGPS() {
+            if (navigator.geolocation) {
+                navigator.geolocation.watchPosition(p => {
+                    userCoords.lat = p.coords.latitude;
+                    userCoords.lng = p.coords.longitude;
+                    const dist = getDistance(userCoords.lat, userCoords.lng, KANTOR_COORDS.lat, KANTOR_COORDS.lng);
+                    const status = document.getElementById('gps-status');
+                    
+                    if (dist <= MAX_RADIUS) {
+                        status.className = "text-center p-3 rounded-lg text-sm bg-green-100 text-green-700 font-bold";
+                        status.innerText = `Lokasi Valid (${Math.round(dist)}m dari kantor)`;
+                        document.getElementById('btn-capture').disabled = false;
+                    } else {
+                        status.className = "text-center p-3 rounded-lg text-sm bg-red-100 text-red-700 font-bold";
+                        status.innerText = `Terlalu Jauh (${Math.round(dist)}m). Maks 100m.`;
+                        document.getElementById('btn-capture').disabled = true;
+                    }
+                }, null, { enableHighAccuracy: true });
+            }
+        }
+
+        // 4. Data Submission
+        async function uploadData() {
+            const btn = document.getElementById('btn-kirim');
+            btn.disabled = true;
+            btn.innerText = "Mengirim data...";
+
+            const payload = {
+                nama: document.getElementById('nama').value,
+                dinas: document.getElementById('dinas').value,
+                shift: document.getElementById('shift').value,
+                divisi: document.getElementById('divisi').value,
+                lat: userCoords.lat,
+                lng: userCoords.lng,
+                image: document.getElementById('canvas').toDataURL('image/jpeg', 0.6)
+            };
+
+            try {
+                // Catatan: Gunakan mode no-cors untuk Apps Script jika hanya kirim data
+                await fetch(WEB_APP_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    body: JSON.stringify(payload)
+                });
+                alert("Absensi Berhasil!");
+                location.reload();
+            } catch (e) {
+                alert("Error: " + e.message);
+                btn.disabled = false;
+                btn.innerText = "Kirim Absensi Sekarang";
+            }
+        }
+
+        // 5. Service Worker Registration
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('data:text/javascript;base64,' + btoa(`
+                    self.addEventListener('fetch', function(e) { e.respondWith(fetch(e.request).catch(() => caches.match(e.request))); });
+                `));
+            });
+        }
+    </script>
+</body>
+</html>
